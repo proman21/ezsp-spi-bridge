@@ -30,3 +30,5 @@ impl PartialEq for Error {
         core::mem::discriminant(self) == core::mem::discriminant(other)
     }
 }
+
+pub type Result<T> = std::result::Result<T, Error>;

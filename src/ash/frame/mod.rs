@@ -22,7 +22,7 @@ pub use self::{
     rst_ack::RstAckFrame,
 };
 
-use super::error::Error;
+use super::error::{Error, Result};
 
 pub const FLAG_BYTE: u8 = 0x7E;
 pub const SUB_BYTE: u8 = 0x18;
@@ -53,7 +53,7 @@ pub enum Frame {
 impl Frame {
     /// Check if a full frame can be found in the buffer, and if the frame
     /// checksum is valid
-    pub fn check(buf: &mut Cursor<&mut [u8]>) -> Result<(), Error> {
+    pub fn check(buf: &mut Cursor<&mut [u8]>) -> Result<()> {
         // Search for a Flag byte
         let len = buf
             .get_ref()
@@ -84,7 +84,7 @@ impl Frame {
         Ok(())
     }
 
-    pub fn parse(buf: &[u8]) -> Result<Frame, Error> {
+    pub fn parse(buf: &[u8]) -> Result<Frame> {
         FrameFormat::parse(buf)
             .finish()
             .map(|(_, frame)| frame)
@@ -210,7 +210,7 @@ mod tests {
     fn parse_succeds_when_valid_frame_exists() {
         let buf = [0x25, 0x00, 0x00, 0x00, 0x02, 0x1A, 0xAD, 0x7E];
         let res = Frame::parse(&buf);
-        
+
         assert!(res.is_ok())
     }
 }

@@ -6,4 +6,5 @@ mod frame;
 mod types;
 
 pub use connection::Connection;
-pub use error::Error;
+pub use error::{Error, Result};
+pub use types::FrameNumber;

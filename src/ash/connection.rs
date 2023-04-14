@@ -1,5 +1,5 @@
 use std::{
-    io::{BufWriter, Cursor, Read, Write, IntoInnerError},
+    io::{BufWriter, Cursor, Read, Write},
     slice::from_raw_parts_mut,
 };
 
@@ -8,12 +8,11 @@ use bytes::{Buf, BytesMut};
 use crate::ash::frame::FrameFormat;
 
 use super::{
-    error::Error,
+    error::{Error, Result},
     frame::{Frame, CANCEL_BYTE, FLAG_BYTE, SUB_BYTE},
 };
 
-/// A wrapper around a reader and writer that reads and writes ASH frames to
-/// the stream
+/// A wrapper around a reader and writer that reads and writes ASH frames
 pub struct Connection<R: Read, W: Write> {
     buffer: BytesMut,
     writer: BufWriter<W>,
@@ -31,24 +30,32 @@ impl<R: Read, W: Write> Connection<R, W> {
         }
     }
 
-    pub fn into_inner(self) -> Result<(R, W), (Self, std::io::Error)> {
-        let Self{ buffer, writer, reader, dropping } = self;
+    pub fn into_inner(self) -> std::result::Result<(R, W), (Self, std::io::Error)> {
+        let Self {
+            buffer,
+            writer,
+            reader,
+            dropping,
+        } = self;
         match writer.into_inner() {
             Ok(w) => Ok((reader, w)),
             Err(e) => {
                 let (err, w) = e.into_parts();
 
-                Err((Self {
-                    writer: w,
-                    reader,
-                    buffer,
-                    dropping
-                }, err))
+                Err((
+                    Self {
+                        writer: w,
+                        reader,
+                        buffer,
+                        dropping,
+                    },
+                    err,
+                ))
             }
         }
     }
 
-    pub fn read_frame(&mut self) -> Result<Option<Frame>, Error> {
+    pub fn read_frame(&mut self) -> Result<Option<Frame>> {
         loop {
             if self.dropping {
                 // If we have received a Substitute byte, drop data until we see a Flag byte
@@ -84,7 +91,7 @@ impl<R: Read, W: Write> Connection<R, W> {
         }
     }
 
-    fn parse_frame(&mut self) -> Result<Option<Frame>, Error> {
+    fn parse_frame(&mut self) -> Result<Option<Frame>> {
         let mut buf = Cursor::new(&mut self.buffer[..]);
 
         match Frame::check(&mut buf) {
@@ -102,7 +109,7 @@ impl<R: Read, W: Write> Connection<R, W> {
         }
     }
 
-    pub fn write_frame(&mut self, frame: &Frame) -> Result<(), Error> {
+    pub fn write_frame(&mut self, frame: &Frame) -> Result<()> {
         // Allocate a byte slice that is big enough for the unescaped frame
         let mut buf = BytesMut::with_capacity(frame.data_len() + 4);
 
@@ -114,7 +121,7 @@ impl<R: Read, W: Write> Connection<R, W> {
         Ok(())
     }
 
-    pub fn flush(&mut self) -> Result<(), Error> {
+    pub fn flush(&mut self) -> Result<()> {
         self.writer.flush()?;
         Ok(())
     }
