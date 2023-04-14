@@ -1,9 +1,13 @@
-use crc::{Crc, CRC_16_XMODEM};
+use crc::{Crc, Digest, CRC_16_XMODEM};
 
 const CRC_CCITT: Crc<u16> = Crc::<u16>::new(&CRC_16_XMODEM);
 
+pub fn crc_digester() -> Digest<'static, u16> {
+    CRC_CCITT.digest_with_initial(0xFFFF)
+}
+
 pub fn frame_checksum(frame: &[u8]) -> u16 {
-    let mut digester = CRC_CCITT.digest_with_initial(0xFFFF);
+    let mut digester = crc_digester();
     digester.update(frame);
     digester.finalize()
 }

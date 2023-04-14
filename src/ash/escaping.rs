@@ -1,12 +1,14 @@
 use bytes::BufMut;
 
-const RESERVED_BYTES: [u8; 6] = [0x7E, 0x7D, 0x11, 0x13, 0x18, 0x1A];
+use super::frame::{ESCAPE_BYTE, FLAG_BYTE, SUB_BYTE, CANCEL_BYTE};
 
-pub fn escape_reserved_bytes(frame: &[u8], buf: &mut impl BufMut) {
+const RESERVED_BYTES: [u8; 6] = [FLAG_BYTE, ESCAPE_BYTE, 0x11, 0x13, SUB_BYTE, CANCEL_BYTE];
+
+pub fn escape_reserved_bytes(frame: &[u8], mut buf: &mut [u8]) {
     for item in frame.split_inclusive(|x| RESERVED_BYTES.contains(x)) {
         if let Some((byte, rest)) = item.split_last() {
             buf.put_slice(rest);
-            buf.put_u8(0x7D);
+            buf.put_u8(ESCAPE_BYTE);
             buf.put_u8(byte ^ 0x20);
         }
     }
@@ -21,7 +23,7 @@ pub fn unescape_reserved_bytes(buf: &mut [u8]) {
             }
             escape_next = false;
         } else {
-            escape_next = *byte == 0x7D
+            escape_next = *byte == ESCAPE_BYTE
         }
     }
 }
