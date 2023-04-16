@@ -84,6 +84,7 @@ impl Frame {
         Ok(())
     }
 
+    /// Try to parse a frame from the given buffer
     pub fn parse(buf: &[u8]) -> Result<Frame> {
         FrameFormat::parse(buf)
             .finish()
@@ -91,6 +92,7 @@ impl Frame {
             .map_err(Error::from)
     }
 
+    /// Serialize the frame and write it into a buffer
     pub fn serialize(&self, buf: &mut BytesMut) {
         buf.put_u8(self.flag());
         self.serialize_data(buf);

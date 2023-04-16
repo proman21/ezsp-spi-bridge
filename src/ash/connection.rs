@@ -5,11 +5,9 @@ use std::{
 
 use bytes::{Buf, BytesMut};
 
-use crate::ash::frame::FrameFormat;
-
 use super::{
     error::{Error, Result},
-    frame::{Frame, CANCEL_BYTE, FLAG_BYTE, SUB_BYTE},
+    frame::{Frame, FrameFormat, CANCEL_BYTE, FLAG_BYTE, SUB_BYTE},
 };
 
 /// A wrapper around a reader and writer that reads and writes ASH frames
@@ -55,6 +53,8 @@ impl<R: Read, W: Write> Connection<R, W> {
         }
     }
 
+    /// Attempt to read a frame from the internal buffer, filling it with more
+    /// data from the inner reader if none can be found
     pub fn read_frame(&mut self) -> Result<Option<Frame>> {
         loop {
             if self.dropping {
@@ -91,6 +91,7 @@ impl<R: Read, W: Write> Connection<R, W> {
         }
     }
 
+    /// Check for a frame and try to parse it out
     fn parse_frame(&mut self) -> Result<Option<Frame>> {
         let mut buf = Cursor::new(&mut self.buffer[..]);
 
