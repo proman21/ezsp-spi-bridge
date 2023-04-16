@@ -7,7 +7,7 @@ use nom::{
     sequence::{preceded, tuple},
 };
 
-use crate::ash::types::FrameNumber;
+use crate::ash::{buffer::Buffer, types::FrameNumber};
 
 use super::{FrameFormat, ParserResult};
 
@@ -36,8 +36,8 @@ impl AckFrame {
     }
 }
 
-fn ack_control_byte(input: &[u8]) -> ParserResult<(bool, bool, u8)> {
-    bits::<_, _, Error<(&[u8], usize)>, _, _>(preceded(
+fn ack_control_byte(input: Buffer) -> ParserResult<(bool, bool, u8)> {
+    bits::<_, _, Error<(Buffer, usize)>, _, _>(preceded(
         tag(0b100, 3usize),
         tuple((bool, bool, take(3usize))),
     ))(input)
@@ -48,7 +48,7 @@ impl FrameFormat for AckFrame {
         0x80 | ((self.res as u8) << 4) | ((self.n_rdy as u8) << 3) | *self.ack_num
     }
 
-    fn parse(input: &[u8]) -> ParserResult<Self> {
+    fn parse(input: Buffer) -> ParserResult<Self> {
         let (rest, (res, n_rdy, ack_num)) = ack_control_byte(input)?;
         let frame = AckFrame {
             res,
@@ -63,14 +63,14 @@ impl FrameFormat for AckFrame {
 mod tests {
     use bytes::BytesMut;
 
-    use crate::ash::{frame::FrameFormat, types::FrameNumber};
+    use crate::ash::{buffer::Buffer, frame::FrameFormat, types::FrameNumber};
 
     use super::AckFrame;
 
     #[test]
     fn it_parses_a_valid_frame_correctly_1() {
-        let buf = [0x81];
-        let (_rest, frame) = AckFrame::parse(&buf).unwrap();
+        let buf = Buffer::from([0x81].as_ref());
+        let (_rest, frame) = AckFrame::parse(buf).unwrap();
 
         assert!(frame.is_ready());
         assert_eq!(*frame.acknowledgement_number(), 1);
@@ -78,8 +78,8 @@ mod tests {
 
     #[test]
     fn it_parses_a_valid_frame_correctly_2() {
-        let buf = [0x8E];
-        let (_rest, frame) = AckFrame::parse(&buf).unwrap();
+        let buf = Buffer::from([0x8E].as_ref());
+        let (_rest, frame) = AckFrame::parse(buf).unwrap();
 
         assert!(!frame.is_ready());
         assert_eq!(*frame.acknowledgement_number(), 6);
@@ -87,8 +87,8 @@ mod tests {
 
     #[test]
     fn it_fails_to_parse_invalid_frame() {
-        let buf = [0x25, 0x42, 0x21, 0xA8, 0x56];
-        let res = AckFrame::parse(&buf);
+        let buf = Buffer::from([0x25, 0x42, 0x21, 0xA8, 0x56].as_ref());
+        let res = AckFrame::parse(buf);
 
         assert!(res.is_err());
     }

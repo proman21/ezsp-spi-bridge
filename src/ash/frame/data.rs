@@ -1,4 +1,5 @@
-use bytes::{Bytes, BytesMut};
+use bytes::Bytes;
+use nom::sequence::Tuple;
 use nom::{
     bits::{
         bits,
@@ -6,10 +7,10 @@ use nom::{
     },
     combinator::{rest, verify},
     error::Error,
-    sequence::{preceded, tuple, Tuple},
+    sequence::{preceded, tuple},
 };
 
-use crate::ash::types::FrameNumber;
+use crate::ash::{buffer::Buffer, types::FrameNumber};
 
 use super::{FrameFormat, ParserResult};
 
@@ -56,8 +57,8 @@ impl DataFrame {
     }
 }
 
-fn data_control_byte(input: &[u8]) -> ParserResult<(u8, bool, u8)> {
-    bits::<_, _, Error<(&[u8], usize)>, _, _>(preceded(
+fn data_control_byte(input: Buffer) -> ParserResult<(u8, bool, u8)> {
+    bits::<_, _, Error<(Buffer, usize)>, _, _>(preceded(
         tag(0, 1usize),
         tuple((take(3usize), bool, take(3usize))),
     ))(input)
@@ -77,22 +78,20 @@ impl FrameFormat for DataFrame {
         (*self.frm_num << 4) | ((self.re_tx as u8) << 3) | *self.ack_num
     }
 
-    fn parse(input: &[u8]) -> ParserResult<Self> {
-        let (rest, ((frm_num, re_tx, ack_num), xor_data)) = (
+    fn parse(input: Buffer) -> ParserResult<Self> {
+        let (rest, ((frm_num, re_tx, ack_num), mut xor_data)) = (
             data_control_byte,
             verify(rest, |d: &[u8]| (d.len() >= 3) && (d.len() <= 128)),
         )
             .parse(input)?;
 
-        let mut data = BytesMut::with_capacity(xor_data.len());
-        data.extend_from_slice(xor_data);
-        randomize_data(&mut data[..xor_data.len()]);
+        randomize_data(&mut xor_data);
 
         let frame = DataFrame {
             frm_num: FrameNumber::new_truncate(frm_num),
             re_tx,
             ack_num: FrameNumber::new_truncate(ack_num),
-            data: data.freeze(),
+            data: xor_data.freeze(),
         };
         Ok((rest, frame))
     }
@@ -100,12 +99,14 @@ impl FrameFormat for DataFrame {
 
 #[cfg(test)]
 mod tests {
+    use bytes::BytesMut;
+
     use super::*;
 
     #[test]
     fn it_parses_a_valid_frame_correctly() {
-        let buf = [0x25, 0x42, 0x21, 0xA8, 0x56];
-        let (_rest, frame) = DataFrame::parse(&buf).unwrap();
+        let buf = Buffer::from([0x25, 0x42, 0x21, 0xA8, 0x56].as_ref());
+        let (_rest, frame) = DataFrame::parse(buf).unwrap();
 
         assert_eq!(*frame.frame_number(), 2);
         assert!(!frame.is_retransmitted());
@@ -115,8 +116,8 @@ mod tests {
 
     #[test]
     fn it_fails_to_parse_invalid_frame() {
-        let buf = [0xA6];
-        let res = DataFrame::parse(&buf);
+        let buf = Buffer::from([0xA6].as_ref());
+        let res = DataFrame::parse(buf);
         assert!(res.is_err());
     }
 

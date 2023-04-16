@@ -1,6 +1,6 @@
 use bytes::BufMut;
 
-use super::frame::{ESCAPE_BYTE, FLAG_BYTE, SUB_BYTE, CANCEL_BYTE};
+use super::frame::{CANCEL_BYTE, ESCAPE_BYTE, FLAG_BYTE, SUB_BYTE};
 
 const RESERVED_BYTES: [u8; 6] = [FLAG_BYTE, ESCAPE_BYTE, 0x11, 0x13, SUB_BYTE, CANCEL_BYTE];
 

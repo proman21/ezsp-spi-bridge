@@ -1,6 +1,8 @@
 use nom::error::{Error as NomError, ErrorKind};
 use std::io::Error as IoError;
 
+use super::buffer::Buffer;
+
 #[derive(Debug)]
 pub enum Error {
     Incomplete,
@@ -10,8 +12,8 @@ pub enum Error {
     UnknownFrame,
 }
 
-impl From<NomError<&[u8]>> for Error {
-    fn from(value: NomError<&[u8]>) -> Self {
+impl From<NomError<Buffer<'_>>> for Error {
+    fn from(value: NomError<Buffer>) -> Self {
         match value.code {
             ErrorKind::Eof | ErrorKind::Verify => Error::InvalidDataField,
             _ => Error::UnknownFrame,

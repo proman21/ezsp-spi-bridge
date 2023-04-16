@@ -1,3 +1,4 @@
+mod buffer;
 mod checksum;
 mod connection;
 mod error;

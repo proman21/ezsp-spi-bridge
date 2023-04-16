@@ -5,6 +5,8 @@ use nom::{
     sequence::{preceded, tuple},
 };
 
+use crate::ash::buffer::Buffer;
+
 use super::FrameFormat;
 
 #[derive(Debug)]
@@ -41,7 +43,7 @@ impl FrameFormat for ErrorFrame {
         buf.put_u8(self.code);
     }
 
-    fn parse(input: &[u8]) -> super::ParserResult<Self> {
+    fn parse(input: Buffer) -> super::ParserResult<Self> {
         let (rest, (version, code)) = preceded(tag([0xC2]), tuple((u8, u8)))(input)?;
         let frame = ErrorFrame::new(version, code);
         Ok((rest, frame))
@@ -52,14 +54,14 @@ impl FrameFormat for ErrorFrame {
 mod tests {
     use bytes::BytesMut;
 
-    use crate::ash::frame::FrameFormat;
+    use crate::ash::{buffer::Buffer, frame::FrameFormat};
 
     use super::ErrorFrame;
 
     #[test]
     fn it_parse_a_valid_frame_correctly() {
-        let buf = [0xC2, 0x01, 0x52];
-        let (_rest, frame) = ErrorFrame::parse(&buf).unwrap();
+        let buf = Buffer::from([0xC2, 0x01, 0x52].as_ref());
+        let (_rest, frame) = ErrorFrame::parse(buf).unwrap();
 
         assert_eq!(frame.version(), 0x01);
         assert_eq!(frame.code(), 0x52);
@@ -67,8 +69,8 @@ mod tests {
 
     #[test]
     fn it_fails_to_parse_invalid_frame() {
-        let buf = [0xC2];
-        let res = ErrorFrame::parse(&buf);
+        let buf = Buffer::from([0xC2].as_ref());
+        let res = ErrorFrame::parse(buf);
 
         assert!(res.is_err());
     }

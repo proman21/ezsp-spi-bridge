@@ -1,5 +1,7 @@
 use nom::bytes::complete::tag;
 
+use crate::ash::buffer::Buffer;
+
 use super::FrameFormat;
 
 #[derive(Debug)]
@@ -10,7 +12,7 @@ impl FrameFormat for RstFrame {
         0xC0
     }
 
-    fn parse(input: &[u8]) -> super::ParserResult<Self> {
+    fn parse(input: Buffer) -> super::ParserResult<Self> {
         let (rest, _control) = tag([0xC0])(input)?;
         Ok((rest, RstFrame))
     }

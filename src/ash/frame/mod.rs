@@ -14,7 +14,7 @@ use nom::{
     Finish, IResult,
 };
 
-use super::{checksum::frame_checksum, escaping::escape_reserved_bytes};
+use super::{buffer::Buffer, checksum::frame_checksum, escaping::escape_reserved_bytes};
 use crate::ash::escaping::unescape_reserved_bytes;
 
 pub use self::{
@@ -29,10 +29,10 @@ pub const SUB_BYTE: u8 = 0x18;
 pub const CANCEL_BYTE: u8 = 0x1A;
 pub const ESCAPE_BYTE: u8 = 0x7D;
 
-pub type ParserResult<'a, O> = IResult<&'a [u8], O>;
+pub type ParserResult<'a, O> = IResult<Buffer<'a>, O>;
 
 pub trait FrameFormat: Sized {
-    fn parse(input: &[u8]) -> ParserResult<Self>;
+    fn parse(input: Buffer) -> ParserResult<Self>;
     fn flag(&self) -> u8;
     fn data_len(&self) -> usize {
         0
@@ -85,7 +85,7 @@ impl Frame {
     }
 
     /// Try to parse a frame from the given buffer
-    pub fn parse(buf: &[u8]) -> Result<Frame> {
+    pub fn parse(buf: Buffer) -> Result<Frame> {
         FrameFormat::parse(buf)
             .finish()
             .map(|(_, frame)| frame)
@@ -93,9 +93,9 @@ impl Frame {
     }
 
     /// Serialize the frame and write it into a buffer
-    pub fn serialize(&self, buf: &mut BytesMut) {
+    pub fn serialize(&self, mut buf: &mut BytesMut) {
         buf.put_u8(self.flag());
-        self.serialize_data(buf);
+        self.serialize_data(&mut buf);
         let checksum = frame_checksum(buf);
         buf.put_u16(checksum);
         let unescaped_bytes = buf.split().freeze();
@@ -105,7 +105,7 @@ impl Frame {
 }
 
 impl FrameFormat for Frame {
-    fn parse(input: &[u8]) -> ParserResult<Self> {
+    fn parse(input: Buffer) -> ParserResult<Self> {
         all_consuming(alt((
             map(DataFrame::parse, Frame::Data),
             map(AckFrame::parse, Frame::Ack),
@@ -156,7 +156,7 @@ mod tests {
 
     use super::{Frame, FLAG_BYTE};
 
-    use crate::ash::error::Error;
+    use crate::ash::{buffer::Buffer, error::Error};
 
     #[test]
     fn check_fails_when_no_flag_byte_is_found() {
@@ -199,8 +199,8 @@ mod tests {
 
     #[test]
     fn parse_fails_when_frame_data_field_is_too_long() {
-        let buf = [0x81, 0x42, 0x32, 0xBD, 0x49, 0x7E];
-        let err = Frame::parse(&buf).unwrap_err();
+        let buf = Buffer::from([0x81, 0x42, 0x32, 0xBD, 0x49, 0x7E].as_ref());
+        let err = Frame::parse(buf).unwrap_err();
 
         assert_eq!(err, Error::InvalidDataField)
     }
@@ -210,8 +210,8 @@ mod tests {
 
     #[test]
     fn parse_succeds_when_valid_frame_exists() {
-        let buf = [0x25, 0x00, 0x00, 0x00, 0x02, 0x1A, 0xAD, 0x7E];
-        let res = Frame::parse(&buf);
+        let buf = Buffer::from([0x25, 0x00, 0x00, 0x00, 0x02, 0x1A, 0xAD, 0x7E].as_ref());
+        let res = Frame::parse(buf);
 
         assert!(res.is_ok())
     }
