@@ -93,9 +93,9 @@ impl Frame {
     }
 
     /// Serialize the frame and write it into a buffer
-    pub fn serialize(&self, mut buf: &mut BytesMut) {
+    pub fn serialize(&self, buf: &mut BytesMut) {
         buf.put_u8(self.flag());
-        self.serialize_data(&mut buf);
+        self.serialize_data(buf);
         let checksum = frame_checksum(buf);
         buf.put_u16(checksum);
         let unescaped_bytes = buf.split().freeze();
