@@ -10,13 +10,15 @@ use std::{
 };
 
 use bytes::{buf::UninitSlice, Buf, BufMut, Bytes, BytesMut};
-use nom::{Compare, CompareResult, InputIter, InputLength, InputTake, Needed, Slice};
+use nom::{Compare, CompareResult, IResult, InputIter, InputLength, InputTake, Needed, Slice};
 
 #[derive(Debug, Default)]
 pub struct Buffer<'a> {
     inner: UnsafeCell<BytesMut>,
     _phantom: PhantomData<&'a ()>,
 }
+
+pub type ParserResult<'a, O> = IResult<Buffer<'a>, O>;
 
 impl<'a> Buffer<'a> {
     fn construct(inner: UnsafeCell<BytesMut>) -> Buffer<'a> {

@@ -1,7 +1,7 @@
 use nom::error::{Error as NomError, ErrorKind};
 use std::io::Error as IoError;
 
-use super::buffer::Buffer;
+use crate::buffer::Buffer;
 
 #[derive(Debug)]
 pub enum Error {

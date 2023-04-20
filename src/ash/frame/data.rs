@@ -10,9 +10,10 @@ use nom::{
     sequence::{preceded, tuple},
 };
 
-use crate::ash::{buffer::Buffer, types::FrameNumber};
+use crate::ash::types::FrameNumber;
+use crate::buffer::{Buffer, ParserResult};
 
-use super::{FrameFormat, ParserResult};
+use super::{FrameFormat};
 
 fn randomize_data(buf: &mut [u8]) {
     let mut reg: u8 = 0x42;

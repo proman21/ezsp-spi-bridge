@@ -5,7 +5,7 @@ use nom::{
     sequence::{preceded, tuple},
 };
 
-use crate::ash::buffer::Buffer;
+use crate::buffer::{Buffer, ParserResult};
 
 use super::FrameFormat;
 
@@ -43,7 +43,7 @@ impl FrameFormat for RstAckFrame {
         buf.put_u8(self.code);
     }
 
-    fn parse(input: Buffer) -> super::ParserResult<Self> {
+    fn parse(input: Buffer) -> ParserResult<Self> {
         let (rest, (version, code)) = preceded(tag([0xC1]), tuple((u8, u8)))(input)?;
         let frame = RstAckFrame::new(version, code);
         Ok((rest, frame))
@@ -54,7 +54,8 @@ impl FrameFormat for RstAckFrame {
 mod tests {
     use bytes::BytesMut;
 
-    use crate::ash::{buffer::Buffer, frame::FrameFormat};
+    use crate::ash::frame::FrameFormat;
+    use crate::buffer::Buffer;
 
     use super::RstAckFrame;
 

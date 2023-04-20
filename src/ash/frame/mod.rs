@@ -11,11 +11,12 @@ use bytes::{Buf, BufMut, BytesMut};
 use nom::{
     branch::alt,
     combinator::{all_consuming, map},
-    Finish, IResult,
+    Finish,
 };
 
-use super::{buffer::Buffer, checksum::frame_checksum, escaping::escape_reserved_bytes};
+use super::{checksum::frame_checksum, escaping::escape_reserved_bytes};
 use crate::ash::escaping::unescape_reserved_bytes;
+use crate::buffer::{Buffer, ParserResult};
 
 pub use self::{
     ack::AckFrame, data::DataFrame, error::ErrorFrame, nak::NakFrame, rst::RstFrame,
@@ -28,8 +29,6 @@ pub const FLAG_BYTE: u8 = 0x7E;
 pub const SUB_BYTE: u8 = 0x18;
 pub const CANCEL_BYTE: u8 = 0x1A;
 pub const ESCAPE_BYTE: u8 = 0x7D;
-
-pub type ParserResult<'a, O> = IResult<Buffer<'a>, O>;
 
 pub trait FrameFormat: Sized {
     fn parse(input: Buffer) -> ParserResult<Self>;
@@ -156,7 +155,8 @@ mod tests {
 
     use super::{Frame, FLAG_BYTE};
 
-    use crate::ash::{buffer::Buffer, error::Error};
+    use crate::ash::error::Error;
+    use crate::buffer::Buffer;
 
     #[test]
     fn check_fails_when_no_flag_byte_is_found() {

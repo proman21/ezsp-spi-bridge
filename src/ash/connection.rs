@@ -3,10 +3,10 @@ use std::io::{BufWriter, Cursor, Read, Write};
 use bytes::{Buf, BytesMut};
 
 use super::{
-    buffer::Buffer,
     error::{Error, Result},
     frame::{Frame, FrameFormat, CANCEL_BYTE, FLAG_BYTE, SUB_BYTE},
 };
+use crate::buffer::Buffer;
 
 /// A wrapper around a reader and writer that reads and writes ASH frames
 pub struct Connection<'a, R: Read, W: Write> {
