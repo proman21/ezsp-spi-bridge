@@ -5,9 +5,9 @@ use nom::{
     sequence::{preceded, tuple},
 };
 
-use crate::buffer::{Buffer, ParserResult};
+use crate::buffer::BufferMut;
 
-use super::FrameFormat;
+use super::{FrameFormat, ParserResult};
 
 #[derive(Debug)]
 pub struct RstAckFrame {
@@ -43,7 +43,7 @@ impl FrameFormat for RstAckFrame {
         buf.put_u8(self.code);
     }
 
-    fn parse(input: Buffer) -> ParserResult<Self> {
+    fn parse(input: BufferMut) -> ParserResult<Self> {
         let (rest, (version, code)) = preceded(tag([0xC1]), tuple((u8, u8)))(input)?;
         let frame = RstAckFrame::new(version, code);
         Ok((rest, frame))
@@ -54,14 +54,14 @@ impl FrameFormat for RstAckFrame {
 mod tests {
     use bytes::BytesMut;
 
+    use crate::buffer::BufferMut;
     use crate::ash::frame::FrameFormat;
-    use crate::buffer::Buffer;
 
     use super::RstAckFrame;
 
     #[test]
     fn it_parse_a_valid_frame_correctly() {
-        let buf = Buffer::from([0xC1, 0x02, 0x02].as_ref());
+        let buf = BufferMut::from([0xC1, 0x02, 0x02].as_ref());
         let (_rest, frame) = RstAckFrame::parse(buf).unwrap();
 
         assert_eq!(frame.version(), 0x02);
@@ -70,7 +70,7 @@ mod tests {
 
     #[test]
     fn it_fails_to_parse_invalid_frame() {
-        let buf = Buffer::from([0xC1].as_ref());
+        let buf = BufferMut::from([0xC1].as_ref());
         let res = RstAckFrame::parse(buf);
 
         assert!(res.is_err());

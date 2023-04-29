@@ -1,8 +1,8 @@
 use nom::bytes::complete::tag;
 
-use crate::buffer::{Buffer, ParserResult};
+use crate::buffer::{BufferMut};
 
-use super::FrameFormat;
+use super::{FrameFormat, ParserResult};
 
 #[derive(Debug)]
 pub struct RstFrame;
@@ -12,7 +12,7 @@ impl FrameFormat for RstFrame {
         0xC0
     }
 
-    fn parse(input: Buffer) -> ParserResult<Self> {
+    fn parse(input: BufferMut) -> ParserResult<Self> {
         let (rest, _control) = tag([0xC0])(input)?;
         Ok((rest, RstFrame))
     }

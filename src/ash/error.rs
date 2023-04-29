@@ -1,7 +1,7 @@
 use nom::error::{Error as NomError, ErrorKind};
 use std::io::Error as IoError;
 
-use crate::buffer::Buffer;
+use crate::buffer::BufferMut;
 
 #[derive(Debug)]
 pub enum Error {
@@ -12,8 +12,8 @@ pub enum Error {
     UnknownFrame,
 }
 
-impl From<NomError<Buffer<'_>>> for Error {
-    fn from(value: NomError<Buffer>) -> Self {
+impl From<NomError<BufferMut>> for Error {
+    fn from(value: NomError<BufferMut>) -> Self {
         match value.code {
             ErrorKind::Eof | ErrorKind::Verify => Error::InvalidDataField,
             _ => Error::UnknownFrame,

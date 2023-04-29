@@ -8,9 +8,9 @@ use nom::{
 };
 
 use crate::ash::types::FrameNumber;
-use crate::buffer::{Buffer, ParserResult};
+use crate::buffer::BufferMut;
 
-use super::{FrameFormat};
+use super::{FrameFormat, ParserResult};
 
 #[derive(Debug)]
 pub struct NakFrame {
@@ -37,8 +37,8 @@ impl NakFrame {
     }
 }
 
-fn nak_control_byte(input: Buffer) -> ParserResult<(bool, bool, u8)> {
-    bits::<_, _, Error<(Buffer, usize)>, _, _>(preceded(
+fn nak_control_byte(input: BufferMut) -> ParserResult<(bool, bool, u8)> {
+    bits::<_, _, Error<(BufferMut, usize)>, _, _>(preceded(
         tag(0b101, 3usize),
         tuple((bool, bool, take(3usize))),
     ))(input)
@@ -49,7 +49,7 @@ impl FrameFormat for NakFrame {
         0xA0 | ((self.res as u8) << 4) | ((self.n_rdy as u8) << 3) | *self.ack_num
     }
 
-    fn parse(input: Buffer) -> ParserResult<Self> {
+    fn parse(input: BufferMut) -> ParserResult<Self> {
         let (rest, (res, n_rdy, ack_num)) = nak_control_byte(input)?;
         let frame = NakFrame {
             res,
@@ -64,14 +64,14 @@ impl FrameFormat for NakFrame {
 mod tests {
     use bytes::BytesMut;
 
+    use crate::buffer::BufferMut;
     use crate::ash::{frame::FrameFormat, types::FrameNumber};
-    use crate::buffer::Buffer;
 
     use super::NakFrame;
 
     #[test]
     fn it_parses_a_valid_frame_correctly_1() {
-        let buf = Buffer::from([0xA6].as_ref());
+        let buf = BufferMut::from([0xA6].as_ref());
         let (_rest, frame) = NakFrame::parse(buf).unwrap();
 
         assert!(frame.is_ready());
@@ -80,7 +80,7 @@ mod tests {
 
     #[test]
     fn it_parses_a_valid_frame_correctly_2() {
-        let buf = Buffer::from([0xAD].as_ref());
+        let buf = BufferMut::from([0xAD].as_ref());
         let (_rest, frame) = NakFrame::parse(buf).unwrap();
 
         assert!(!frame.is_ready());
@@ -89,7 +89,7 @@ mod tests {
 
     #[test]
     fn it_fails_to_parse_invalid_frame() {
-        let buf = Buffer::from([0x25, 0x42, 0x21, 0xA8, 0x56].as_ref());
+        let buf = BufferMut::from([0x25, 0x42, 0x21, 0xA8, 0x56].as_ref());
         let res = NakFrame::parse(buf);
 
         assert!(res.is_err());

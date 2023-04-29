@@ -1,59 +1,37 @@
-use std::io::{BufWriter, Cursor, Read, Write};
+use std::io::{Cursor, ErrorKind};
 
 use bytes::{Buf, BytesMut};
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, BufWriter};
 
 use super::{
     error::{Error, Result},
     frame::{Frame, FrameFormat, CANCEL_BYTE, FLAG_BYTE, SUB_BYTE},
 };
-use crate::buffer::Buffer;
+use crate::buffer::BufferMut;
 
 /// A wrapper around a reader and writer that reads and writes ASH frames
-pub struct Connection<'a, R: Read, W: Write> {
-    buffer: Buffer<'a>,
-    writer: BufWriter<W>,
-    reader: R,
+pub struct Connection<S: AsyncRead + AsyncWrite + Unpin> {
+    buffer: BufferMut,
+    stream: BufWriter<S>,
     dropping: bool,
 }
 
-impl<'a, R: Read, W: Write> Connection<'a, R, W> {
-    pub fn new(reader: R, writer: W) -> Connection<'a, R, W> {
+impl<S: AsyncRead + AsyncWrite + Unpin> Connection<S> {
+    pub fn new(stream: S) -> Connection<S> {
         Self {
             buffer: BytesMut::with_capacity(2048).into(),
-            writer: BufWriter::with_capacity(2048, writer),
-            reader,
+            stream: BufWriter::new(stream),
             dropping: false,
         }
     }
 
-    pub fn into_inner(self) -> std::result::Result<(R, W), (Self, std::io::Error)> {
-        let Self {
-            buffer,
-            writer,
-            reader,
-            dropping,
-        } = self;
-        match writer.into_inner() {
-            Ok(w) => Ok((reader, w)),
-            Err(e) => {
-                let (err, w) = e.into_parts();
-
-                Err((
-                    Self {
-                        writer: w,
-                        reader,
-                        buffer,
-                        dropping,
-                    },
-                    err,
-                ))
-            }
-        }
+    pub fn into_inner(self) -> S {
+        self.stream.into_inner()
     }
 
     /// Attempt to read a frame from the internal buffer, filling it with more
     /// data from the inner reader if none can be found
-    pub fn read_frame(&mut self) -> Result<Option<Frame>> {
+    pub async fn read_frame(&mut self) -> Result<Option<Frame>> {
         loop {
             if self.dropping {
                 self.drop_buffer_until_flag();
@@ -65,9 +43,17 @@ impl<'a, R: Read, W: Write> Connection<'a, R, W> {
             }
 
             // Read some bytes into the vacant part of the buffer.
-            self.buffer.fill_from_reader(&mut self.reader)?;
+            if 0 == self.stream.read_buf(&mut self.buffer).await? {
+                if self.buffer.is_empty() {
+                    return Ok(None);
+                } else {
+                    return Err(std::io::Error::from(ErrorKind::ConnectionReset).into());
+                }
+            }
 
-            self.drop_buffer_before_cancel_substitute();
+            if !self.dropping {
+                self.drop_buffer_before_cancel_substitute();
+            }
         }
     }
 
@@ -110,7 +96,7 @@ impl<'a, R: Read, W: Write> Connection<'a, R, W> {
         }
     }
 
-    pub fn write_frame(&mut self, frame: &Frame) -> Result<()> {
+    pub async fn write_frame(&mut self, frame: &Frame) -> Result<()> {
         // Allocate a byte slice that is big enough for the unescaped frame
         let mut buf = BytesMut::with_capacity(frame.data_len() + 4);
 
@@ -118,12 +104,12 @@ impl<'a, R: Read, W: Write> Connection<'a, R, W> {
         frame.serialize(&mut buf);
 
         // Write the byte slice into the writer
-        self.writer.write_all(&buf)?;
+        self.stream.write_all_buf(&mut buf).await?;
         Ok(())
     }
 
-    pub fn flush(&mut self) -> Result<()> {
-        self.writer.flush()?;
+    pub async fn flush(&mut self) -> Result<()> {
+        self.stream.flush().await?;
         Ok(())
     }
 }

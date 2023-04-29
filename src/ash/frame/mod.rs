@@ -11,12 +11,12 @@ use bytes::{Buf, BufMut, BytesMut};
 use nom::{
     branch::alt,
     combinator::{all_consuming, map},
-    Finish,
+    Finish, IResult,
 };
 
 use super::{checksum::frame_checksum, escaping::escape_reserved_bytes};
 use crate::ash::escaping::unescape_reserved_bytes;
-use crate::buffer::{Buffer, ParserResult};
+use crate::buffer::BufferMut;
 
 pub use self::{
     ack::AckFrame, data::DataFrame, error::ErrorFrame, nak::NakFrame, rst::RstFrame,
@@ -30,8 +30,10 @@ pub const SUB_BYTE: u8 = 0x18;
 pub const CANCEL_BYTE: u8 = 0x1A;
 pub const ESCAPE_BYTE: u8 = 0x7D;
 
+pub type ParserResult<O> = IResult<BufferMut, O>;
+
 pub trait FrameFormat: Sized {
-    fn parse(input: Buffer) -> ParserResult<Self>;
+    fn parse(input: BufferMut) -> ParserResult<Self>;
     fn flag(&self) -> u8;
     fn data_len(&self) -> usize {
         0
@@ -84,7 +86,7 @@ impl Frame {
     }
 
     /// Try to parse a frame from the given buffer
-    pub fn parse(buf: Buffer) -> Result<Frame> {
+    pub fn parse(buf: BufferMut) -> Result<Frame> {
         FrameFormat::parse(buf)
             .finish()
             .map(|(_, frame)| frame)
@@ -104,7 +106,7 @@ impl Frame {
 }
 
 impl FrameFormat for Frame {
-    fn parse(input: Buffer) -> ParserResult<Self> {
+    fn parse(input: BufferMut) -> ParserResult<Self> {
         all_consuming(alt((
             map(DataFrame::parse, Frame::Data),
             map(AckFrame::parse, Frame::Ack),
@@ -156,7 +158,7 @@ mod tests {
     use super::{Frame, FLAG_BYTE};
 
     use crate::ash::error::Error;
-    use crate::buffer::Buffer;
+    use crate::buffer::BufferMut;
 
     #[test]
     fn check_fails_when_no_flag_byte_is_found() {
@@ -199,7 +201,7 @@ mod tests {
 
     #[test]
     fn parse_fails_when_frame_data_field_is_too_long() {
-        let buf = Buffer::from([0x81, 0x42, 0x32, 0xBD, 0x49, 0x7E].as_ref());
+        let buf = BufferMut::from([0x81, 0x42, 0x32, 0xBD, 0x49, 0x7E].as_ref());
         let err = Frame::parse(buf).unwrap_err();
 
         assert_eq!(err, Error::InvalidDataField)
@@ -210,7 +212,7 @@ mod tests {
 
     #[test]
     fn parse_succeds_when_valid_frame_exists() {
-        let buf = Buffer::from([0x25, 0x00, 0x00, 0x00, 0x02, 0x1A, 0xAD, 0x7E].as_ref());
+        let buf = BufferMut::from([0x25, 0x00, 0x00, 0x00, 0x02, 0x1A, 0xAD, 0x7E].as_ref());
         let res = Frame::parse(buf);
 
         assert!(res.is_ok())
