@@ -1,13 +1,13 @@
-use bytes::BufMut;
+use bytes::{Buf, BufMut, BytesMut};
 use nom::{
-    bytes::complete::tag,
-    number::complete::u8,
-    sequence::{preceded, tuple},
+    bytes::streaming::tag,
+    error::{Error, ErrorKind},
+    Err,
 };
 
-use crate::buffer::BufferMut;
+use crate::ash::checksum::crc_digester;
 
-use super::{FrameFormat, ParserResult};
+use super::utils::{frame_data_and_flag, FrameFormat, ParserResult};
 
 #[derive(Debug)]
 pub struct RstAckFrame {
@@ -38,13 +38,31 @@ impl FrameFormat for RstAckFrame {
         2
     }
 
-    fn serialize_data(&self, mut buf: &mut [u8]) {
+    fn serialize_data(&self, buf: &mut BytesMut) {
+        buf.reserve(2);
         buf.put_u8(self.version);
         buf.put_u8(self.code);
     }
 
-    fn parse(input: BufferMut) -> ParserResult<Self> {
-        let (rest, (version, code)) = preceded(tag([0xC1]), tuple((u8, u8)))(input)?;
+    fn parse(input: &[u8]) -> ParserResult<Self> {
+        let mut crc = crc_digester();
+
+        let (i2, ctrl) = tag([0xC1])(input)?;
+        crc.update(ctrl);
+
+        let (rest, mut buf) = frame_data_and_flag(i2)?;
+        if buf.len() != 4 {
+            return Err(Err::Failure(Error::new(rest, ErrorKind::Complete)));
+        }
+
+        crc.update(&buf[..2]);
+        let version = buf.get_u8();
+        let code = buf.get_u8();
+        let checksum = buf.get_u16();
+        if checksum != crc.finalize() {
+            return Err(Err::Failure(Error::new(rest, ErrorKind::Verify)));
+        }
+
         let frame = RstAckFrame::new(version, code);
         Ok((rest, frame))
     }
@@ -54,15 +72,14 @@ impl FrameFormat for RstAckFrame {
 mod tests {
     use bytes::BytesMut;
 
-    use crate::buffer::BufferMut;
     use crate::ash::frame::FrameFormat;
 
     use super::RstAckFrame;
 
     #[test]
     fn it_parse_a_valid_frame_correctly() {
-        let buf = BufferMut::from([0xC1, 0x02, 0x02].as_ref());
-        let (_rest, frame) = RstAckFrame::parse(buf).unwrap();
+        let buf = [0xC1, 0x02, 0x02, 0x9B, 0x7B, 0x7E];
+        let (_rest, frame) = RstAckFrame::parse(&buf).unwrap();
 
         assert_eq!(frame.version(), 0x02);
         assert_eq!(frame.code(), 0x02);
@@ -70,8 +87,8 @@ mod tests {
 
     #[test]
     fn it_fails_to_parse_invalid_frame() {
-        let buf = BufferMut::from([0xC1].as_ref());
-        let res = RstAckFrame::parse(buf);
+        let buf = [0xC1];
+        let res = RstAckFrame::parse(&buf);
 
         assert!(res.is_err());
     }
@@ -93,7 +110,7 @@ mod tests {
     #[test]
     fn it_serializes_data_field_correctly() {
         let frame = RstAckFrame::new(0x02, 0x02);
-        let mut buf = BytesMut::zeroed(2);
+        let mut buf = BytesMut::with_capacity(2);
 
         frame.serialize_data(&mut buf);
         assert_eq!(*buf, [0x02, 0x02]);

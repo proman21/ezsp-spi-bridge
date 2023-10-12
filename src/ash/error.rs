@@ -1,24 +1,12 @@
-use nom::error::{Error as NomError, ErrorKind};
 use std::io::Error as IoError;
-
-use crate::buffer::BufferMut;
 
 #[derive(Debug)]
 pub enum Error {
-    Incomplete,
+    UnknownParsingError,
     InvalidChecksum,
     InvalidDataField,
     Io(IoError),
     UnknownFrame,
-}
-
-impl From<NomError<BufferMut>> for Error {
-    fn from(value: NomError<BufferMut>) -> Self {
-        match value.code {
-            ErrorKind::Eof | ErrorKind::Verify => Error::InvalidDataField,
-            _ => Error::UnknownFrame,
-        }
-    }
 }
 
 impl From<IoError> for Error {

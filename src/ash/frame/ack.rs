@@ -1,16 +1,14 @@
+use bytes::Buf;
 use nom::{
-    bits::{
-        bits,
-        complete::{bool, tag, take},
-    },
-    error::Error,
+    combinator::consumed,
+    error::{Error, ErrorKind},
     sequence::{preceded, tuple},
+    Err,
 };
 
-use crate::ash::types::FrameNumber;
-use crate::buffer::BufferMut;
+use crate::ash::{checksum::crc_digester, types::FrameNumber};
 
-use super::{FrameFormat, ParserResult};
+use super::utils::{frame_data_and_flag, FrameFormat, ParserResult};
 
 #[derive(Debug)]
 pub struct AckFrame {
@@ -37,8 +35,12 @@ impl AckFrame {
     }
 }
 
-fn ack_control_byte(input: BufferMut) -> ParserResult<(bool, bool, u8)> {
-    bits::<_, _, Error<(BufferMut, usize)>, _, _>(preceded(
+fn ack_control_byte(input: &[u8]) -> ParserResult<(bool, bool, u8)> {
+    use nom::bits::{
+        bits,
+        streaming::{bool, tag, take},
+    };
+    bits::<_, _, Error<(&[u8], usize)>, _, _>(preceded(
         tag(0b100, 3usize),
         tuple((bool, bool, take(3usize))),
     ))(input)
@@ -49,8 +51,21 @@ impl FrameFormat for AckFrame {
         0x80 | ((self.res as u8) << 4) | ((self.n_rdy as u8) << 3) | *self.ack_num
     }
 
-    fn parse(input: BufferMut) -> ParserResult<Self> {
-        let (rest, (res, n_rdy, ack_num)) = ack_control_byte(input)?;
+    fn parse(input: &[u8]) -> ParserResult<Self> {
+        let mut crc = crc_digester();
+
+        let (rest, ((ctrl, (res, n_rdy, ack_num)), mut checksum_buf)) =
+            tuple((consumed(ack_control_byte), frame_data_and_flag))(input)?;
+        crc.update(ctrl);
+
+        if checksum_buf.len() != 2 {
+            return Err(Err::Failure(Error::new(rest, ErrorKind::Complete)));
+        }
+        let checksum = checksum_buf.get_u16();
+        if crc.finalize() != checksum {
+            return Err(Err::Failure(Error::new(rest, ErrorKind::Verify)));
+        };
+
         let frame = AckFrame {
             res,
             n_rdy,
@@ -62,35 +77,37 @@ impl FrameFormat for AckFrame {
 
 #[cfg(test)]
 mod tests {
+    use super::AckFrame;
+    use crate::ash::{frame::FrameFormat, types::FrameNumber};
     use bytes::BytesMut;
 
-    use crate::buffer::BufferMut;
-    use crate::ash::{frame::FrameFormat, types::FrameNumber};
-
-    use super::AckFrame;
-
     #[test]
-    fn it_parses_a_valid_frame_correctly_1() {
-        let buf = BufferMut::from([0x81].as_ref());
-        let (_rest, frame) = AckFrame::parse(buf).unwrap();
+    fn it_parses_valid_frames_correctly() {
+        let buf = [0x81, 0x60, 0x59, 0x7E];
+        let (_rest, frame) = AckFrame::parse(&buf).unwrap();
 
         assert!(frame.is_ready());
         assert_eq!(*frame.acknowledgement_number(), 1);
-    }
 
-    #[test]
-    fn it_parses_a_valid_frame_correctly_2() {
-        let buf = BufferMut::from([0x8E].as_ref());
-        let (_rest, frame) = AckFrame::parse(buf).unwrap();
+        let buf = [0x8E, 0x91, 0xB6, 0x7E];
+        let (_rest, frame) = AckFrame::parse(&buf).unwrap();
 
         assert!(!frame.is_ready());
         assert_eq!(*frame.acknowledgement_number(), 6);
     }
 
     #[test]
-    fn it_fails_to_parse_invalid_frame() {
-        let buf = BufferMut::from([0x25, 0x42, 0x21, 0xA8, 0x56].as_ref());
-        let res = AckFrame::parse(buf);
+    fn it_rejects_an_early_flag_byte() {
+        let buf = [0x8E, 0x7E];
+        let res = AckFrame::parse(&buf);
+
+        assert!(res.is_err());
+    }
+
+    #[test]
+    fn it_rejects_a_non_ack_frame() {
+        let buf = [0x25, 0x42, 0x21, 0xA8, 0x56];
+        let res = AckFrame::parse(&buf);
 
         assert!(res.is_err());
     }
@@ -103,14 +120,14 @@ mod tests {
     }
 
     #[test]
-    fn it_returns_correct_data_field_len() {
+    fn it_returns_the_correct_data_field_len() {
         let frame = AckFrame::new(false, true, FrameNumber::new_truncate(6));
 
         assert_eq!(frame.data_len(), 0);
     }
 
     #[test]
-    fn it_serializes_data_field_correctly() {
+    fn it_serializes_the_data_field_correctly() {
         let frame = AckFrame::new(false, true, FrameNumber::new_truncate(6));
         let mut buf = BytesMut::zeroed(2);
 

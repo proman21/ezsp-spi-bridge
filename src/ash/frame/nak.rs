@@ -1,16 +1,14 @@
+use bytes::Buf;
 use nom::{
-    bits::{
-        bits,
-        complete::{bool, tag, take},
-    },
-    error::Error,
+    combinator::consumed,
+    error::{Error, ErrorKind},
     sequence::{preceded, tuple},
+    Err,
 };
 
-use crate::ash::types::FrameNumber;
-use crate::buffer::BufferMut;
+use crate::ash::{checksum::crc_digester, types::FrameNumber};
 
-use super::{FrameFormat, ParserResult};
+use super::utils::{frame_data_and_flag, FrameFormat, ParserResult};
 
 #[derive(Debug)]
 pub struct NakFrame {
@@ -37,8 +35,12 @@ impl NakFrame {
     }
 }
 
-fn nak_control_byte(input: BufferMut) -> ParserResult<(bool, bool, u8)> {
-    bits::<_, _, Error<(BufferMut, usize)>, _, _>(preceded(
+fn nak_control_byte(input: &[u8]) -> ParserResult<(bool, bool, u8)> {
+    use nom::bits::{
+        bits,
+        streaming::{bool, tag, take},
+    };
+    bits::<_, _, Error<(&[u8], usize)>, _, _>(preceded(
         tag(0b101, 3usize),
         tuple((bool, bool, take(3usize))),
     ))(input)
@@ -49,8 +51,21 @@ impl FrameFormat for NakFrame {
         0xA0 | ((self.res as u8) << 4) | ((self.n_rdy as u8) << 3) | *self.ack_num
     }
 
-    fn parse(input: BufferMut) -> ParserResult<Self> {
-        let (rest, (res, n_rdy, ack_num)) = nak_control_byte(input)?;
+    fn parse(input: &[u8]) -> ParserResult<Self> {
+        let mut crc = crc_digester();
+        let (i2, (ctrl, (res, n_rdy, ack_num))) = consumed(nak_control_byte)(input)?;
+        crc.update(ctrl);
+
+        let (rest, mut buf) = frame_data_and_flag(i2)?;
+        if buf.len() != 2 {
+            return Err(Err::Failure(Error::new(rest, ErrorKind::Complete)));
+        }
+
+        let checksum = buf.get_u16();
+        if checksum != crc.finalize() {
+            return Err(Err::Failure(Error::new(rest, ErrorKind::Verify)));
+        }
+
         let frame = NakFrame {
             res,
             n_rdy,
@@ -64,33 +79,29 @@ impl FrameFormat for NakFrame {
 mod tests {
     use bytes::BytesMut;
 
-    use crate::buffer::BufferMut;
     use crate::ash::{frame::FrameFormat, types::FrameNumber};
 
     use super::NakFrame;
 
     #[test]
-    fn it_parses_a_valid_frame_correctly_1() {
-        let buf = BufferMut::from([0xA6].as_ref());
-        let (_rest, frame) = NakFrame::parse(buf).unwrap();
+    fn it_parses_valid_frames_correctly() {
+        let buf = [0xA6, 0x34, 0xDC, 0x7E];
+        let (_rest, frame) = NakFrame::parse(&buf).unwrap();
 
         assert!(frame.is_ready());
         assert_eq!(*frame.acknowledgement_number(), 6);
-    }
 
-    #[test]
-    fn it_parses_a_valid_frame_correctly_2() {
-        let buf = BufferMut::from([0xAD].as_ref());
-        let (_rest, frame) = NakFrame::parse(buf).unwrap();
+        let buf = [0xAD, 0x85, 0xB7, 0x7E];
+        let (_rest, frame) = NakFrame::parse(&buf).unwrap();
 
         assert!(!frame.is_ready());
         assert_eq!(*frame.acknowledgement_number(), 5);
     }
 
     #[test]
-    fn it_fails_to_parse_invalid_frame() {
-        let buf = BufferMut::from([0x25, 0x42, 0x21, 0xA8, 0x56].as_ref());
-        let res = NakFrame::parse(buf);
+    fn it_fails_to_parse_an_invalid_frame() {
+        let buf = [0x25, 0x42, 0x21, 0xA8, 0x56];
+        let res = NakFrame::parse(&buf);
 
         assert!(res.is_err());
     }
@@ -103,14 +114,14 @@ mod tests {
     }
 
     #[test]
-    fn it_returns_correct_data_field_len() {
+    fn it_returns_the_correct_data_field_len() {
         let frame = NakFrame::new(false, true, FrameNumber::new_truncate(6));
 
         assert_eq!(frame.data_len(), 0);
     }
 
     #[test]
-    fn it_serializes_data_field_correctly() {
+    fn it_serializes_the_data_field_correctly() {
         let frame = NakFrame::new(false, true, FrameNumber::new_truncate(6));
         let mut buf = BytesMut::zeroed(2);
 

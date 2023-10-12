@@ -1,6 +1,6 @@
 #![allow(dead_code)]
 mod ash;
-mod buffer;
+mod buffers;
 mod spi;
 
 fn main() {

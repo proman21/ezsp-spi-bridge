@@ -4,42 +4,24 @@ mod error;
 mod nak;
 mod rst;
 mod rst_ack;
+mod utils;
 
-use std::io::Cursor;
-
-use bytes::{Buf, BufMut, BytesMut};
+use bytes::{BufMut, BytesMut};
 use nom::{
     branch::alt,
-    combinator::{all_consuming, map},
-    Finish, IResult,
+    combinator::{cut, map},
 };
 
-use super::{checksum::frame_checksum, escaping::escape_reserved_bytes};
-use crate::ash::escaping::unescape_reserved_bytes;
-use crate::buffer::BufferMut;
+use super::{
+    checksum::frame_checksum,
+    constants::{FLAG_BYTE, RESERVED_BYTES},
+};
 
+use self::utils::{FrameFormat, ParserResult};
 pub use self::{
     ack::AckFrame, data::DataFrame, error::ErrorFrame, nak::NakFrame, rst::RstFrame,
     rst_ack::RstAckFrame,
 };
-
-use super::error::{Error, Result};
-
-pub const FLAG_BYTE: u8 = 0x7E;
-pub const SUB_BYTE: u8 = 0x18;
-pub const CANCEL_BYTE: u8 = 0x1A;
-pub const ESCAPE_BYTE: u8 = 0x7D;
-
-pub type ParserResult<O> = IResult<BufferMut, O>;
-
-pub trait FrameFormat: Sized {
-    fn parse(input: BufferMut) -> ParserResult<Self>;
-    fn flag(&self) -> u8;
-    fn data_len(&self) -> usize {
-        0
-    }
-    fn serialize_data(&self, _buf: &mut [u8]) {}
-}
 
 #[derive(Debug)]
 pub enum Frame {
@@ -52,69 +34,38 @@ pub enum Frame {
 }
 
 impl Frame {
-    /// Check if a full frame can be found in the buffer, and if the frame
-    /// checksum is valid
-    pub fn check(buf: &mut Cursor<&mut [u8]>) -> Result<()> {
-        // Search for a Flag byte
-        let len = buf
-            .get_ref()
-            .iter()
-            .position(|&b| b == FLAG_BYTE)
-            .ok_or(Error::Incomplete)?;
-
-        // Extract the preceding bytes from the buffer
-        buf.advance(len + 1);
-        if len < 2 {
-            return Err(Error::UnknownFrame);
-        }
-
-        let frame = &mut buf.get_mut()[..len];
-
-        // Unstuff the reserved bytes
-        unescape_reserved_bytes(frame);
-
-        // Extract the checksum from the frame
-        let checksum = (&frame[len - 2..]).get_u16();
-
-        // Calculate the checksum and validate
-        let crc = frame_checksum(&frame[..len - 2]);
-        if crc != checksum {
-            return Err(Error::InvalidChecksum);
-        }
-
-        Ok(())
-    }
-
     /// Try to parse a frame from the given buffer
-    pub fn parse(buf: BufferMut) -> Result<Frame> {
+    pub fn parse(buf: &[u8]) -> ParserResult<Frame> {
         FrameFormat::parse(buf)
-            .finish()
-            .map(|(_, frame)| frame)
-            .map_err(Error::from)
     }
 
     /// Serialize the frame and write it into a buffer
     pub fn serialize(&self, buf: &mut BytesMut) {
         buf.put_u8(self.flag());
         self.serialize_data(buf);
+
         let checksum = frame_checksum(buf);
-        buf.put_u16(checksum);
-        let unescaped_bytes = buf.split().freeze();
-        escape_reserved_bytes(&unescaped_bytes, buf);
+        for mut byte in checksum.to_be_bytes() {
+            if RESERVED_BYTES.contains(&byte) {
+                byte ^= 0x20;
+            }
+            buf.put_u8(byte);
+        }
         buf.put_u8(FLAG_BYTE);
     }
 }
 
 impl FrameFormat for Frame {
-    fn parse(input: BufferMut) -> ParserResult<Self> {
-        all_consuming(alt((
+    fn parse(input: &[u8]) -> ParserResult<Self> {
+        // Parser needs to handle escaped bytes correctly
+        cut(alt((
             map(DataFrame::parse, Frame::Data),
             map(AckFrame::parse, Frame::Ack),
             map(NakFrame::parse, Frame::Nak),
             map(RstFrame::parse, Frame::Rst),
             map(RstAckFrame::parse, Frame::RstAck),
             map(ErrorFrame::parse, Frame::Error),
-        )))(input)
+        )))(&input[..])
     }
 
     fn data_len(&self) -> usize {
@@ -139,7 +90,7 @@ impl FrameFormat for Frame {
         }
     }
 
-    fn serialize_data(&self, buf: &mut [u8]) {
+    fn serialize_data(&self, buf: &mut BytesMut) {
         match &self {
             Frame::Data(f) => f.serialize_data(buf),
             Frame::Ack(f) => f.serialize_data(buf),
@@ -153,68 +104,68 @@ impl FrameFormat for Frame {
 
 #[cfg(test)]
 mod tests {
-    use std::io::Cursor;
-
-    use super::{Frame, FLAG_BYTE};
-
-    use crate::ash::error::Error;
-    use crate::buffer::BufferMut;
+    use super::Frame;
+    use nom::Err;
 
     #[test]
-    fn check_fails_when_no_flag_byte_is_found() {
-        let mut buf = [0u8; 16];
-        let mut cursor = Cursor::new(&mut buf[..]);
+    fn it_rejects_an_unknown_frame_type() {
+        let buf = [0xFF];
+        let res = Frame::parse(&buf).unwrap_err();
 
-        let err = Frame::check(&mut cursor).unwrap_err();
-        assert_eq!(err, Error::Incomplete);
-        assert_eq!(cursor.position(), 0);
+        assert!(matches!(res, Err::Failure(_)));
     }
 
     #[test]
-    fn check_fails_when_frame_is_too_short() {
-        let mut buf = [FLAG_BYTE, 0, 0];
-        let mut cursor = Cursor::new(&mut buf[..]);
+    fn it_parses_a_valid_data_frame() {
+        let buf = [0x25, 0x00, 0x00, 0x00, 0x02, 0x1A, 0xAD, 0x7E];
+        let (rest, frame) = Frame::parse(&buf).unwrap();
 
-        let err = Frame::check(&mut cursor).unwrap_err();
-        assert_eq!(err, Error::UnknownFrame);
-        assert_eq!(cursor.position(), 1);
+        assert_eq!(rest.len(), 0);
+        assert!(matches!(frame, Frame::Data(_)))
     }
 
     #[test]
-    fn check_fails_when_the_checksum_is_invalid() {
-        let mut buf = [0x25, 0x00, 0x00, 0x00, 0x02, 0x1A, 0xAF, 0x7E];
-        let mut cursor = Cursor::new(&mut buf[..]);
+    fn it_parses_a_valid_ack_frame() {
+        let buf = [0x81, 0x60, 0x59, 0x7E];
+        let (rest, frame) = Frame::parse(&buf).unwrap();
 
-        let err = Frame::check(&mut cursor).unwrap_err();
-        assert_eq!(err, Error::InvalidChecksum);
-        assert_eq!(cursor.position(), 8);
+        assert_eq!(rest.len(), 0);
+        assert!(matches!(frame, Frame::Ack(_)))
     }
 
     #[test]
-    fn check_passes_when_valid_frame_found() {
-        let mut buf = [0x25, 0x00, 0x00, 0x00, 0x02, 0x1A, 0xAD, 0x7E];
-        let mut cursor = Cursor::new(&mut buf[..]);
+    fn it_parses_a_valid_error_frame() {
+        let buf = [0xC2, 0x02, 0x51, 0xA8, 0xBD, 0x7E];
+        let (rest, frame) = Frame::parse(&buf).unwrap();
 
-        assert!(Frame::check(&mut cursor).is_ok());
-        assert_eq!(cursor.position(), 8);
+        assert_eq!(rest.len(), 0);
+        assert!(matches!(frame, Frame::Error(_)))
     }
 
     #[test]
-    fn parse_fails_when_frame_data_field_is_too_long() {
-        let buf = BufferMut::from([0x81, 0x42, 0x32, 0xBD, 0x49, 0x7E].as_ref());
-        let err = Frame::parse(buf).unwrap_err();
+    fn it_parses_a_valid_nak_frame() {
+        let buf = [0xA6, 0x34, 0xDC, 0x7E];
+        let (rest, frame) = Frame::parse(&buf).unwrap();
 
-        assert_eq!(err, Error::InvalidDataField)
+        assert_eq!(rest.len(), 0);
+        assert!(matches!(frame, Frame::Nak(_)))
     }
 
     #[test]
-    fn parse_fails_when_an_unknown_frame_is_found() {}
+    fn it_parses_a_valid_rst_ack_frame() {
+        let buf = [0xC1, 0x02, 0x02, 0x9B, 0x7B, 0x7E];
+        let (rest, frame) = Frame::parse(&buf).unwrap();
+
+        assert_eq!(rest.len(), 0);
+        assert!(matches!(frame, Frame::RstAck(_)))
+    }
 
     #[test]
-    fn parse_succeds_when_valid_frame_exists() {
-        let buf = BufferMut::from([0x25, 0x00, 0x00, 0x00, 0x02, 0x1A, 0xAD, 0x7E].as_ref());
-        let res = Frame::parse(buf);
+    fn it_parses_a_valid_rst_frame() {
+        let buf = [0xC0, 0x38, 0xBC, 0x7E];
+        let (rest, frame) = Frame::parse(&buf).unwrap();
 
-        assert!(res.is_ok())
+        assert_eq!(rest.len(), 0);
+        assert!(matches!(frame, Frame::Rst(_)))
     }
 }
