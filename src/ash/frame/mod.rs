@@ -58,14 +58,14 @@ impl Frame {
 impl FrameFormat for Frame {
     fn parse(input: &[u8]) -> ParserResult<Self> {
         // Parser needs to handle escaped bytes correctly
-        cut(alt((
+        alt((
             map(DataFrame::parse, Frame::Data),
             map(AckFrame::parse, Frame::Ack),
             map(NakFrame::parse, Frame::Nak),
             map(RstFrame::parse, Frame::Rst),
             map(RstAckFrame::parse, Frame::RstAck),
             map(ErrorFrame::parse, Frame::Error),
-        )))(&input[..])
+        ))(&input[..])
     }
 
     fn data_len(&self) -> usize {

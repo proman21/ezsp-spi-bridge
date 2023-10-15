@@ -1,5 +1,5 @@
 use bytes::{Buf, BytesMut};
-use nom::{error::ErrorKind, Err, Needed, Offset};
+use nom::{error::ErrorKind, Err, Finish, Needed, Offset};
 use tokio_util::codec::{Decoder, Encoder};
 
 use super::{
@@ -70,19 +70,22 @@ impl Decoder for AshCodec {
     fn decode(&mut self, src: &mut BytesMut) -> Result<Option<Self::Item>> {
         self.drop_buffer_framing_errors(src);
 
-        match Frame::parse(&src[..]) {
+        let res = Frame::parse(&src[..]);
+
+        if let Err(Err::Incomplete(needed)) = res {
+            if let Needed::Size(additional) = needed {
+                src.reserve(additional.into());
+            }
+            return Ok(None);
+        }
+
+        match res.finish() {
             Ok((rest, frame)) => {
                 let offset = src.offset(rest);
                 src.advance(offset);
                 Ok(Some(Ok(frame)))
             }
-            Err(Err::Incomplete(needed)) => {
-                if let Needed::Size(additional) = needed {
-                    src.reserve(additional.into());
-                }
-                Ok(None)
-            }
-            Err(Err::Failure(e)) => match e.code {
+            Err(e) => match e.code {
                 ErrorKind::Verify => {
                     src.advance(src.offset(e.input));
                     Ok(Some(Err(Error::InvalidChecksum)))
@@ -91,10 +94,8 @@ impl Decoder for AshCodec {
                     src.advance(src.offset(e.input));
                     Ok(Some(Err(Error::InvalidDataField)))
                 }
-                ErrorKind::Alt | ErrorKind::Tag => Err(Error::UnknownFrame),
-                _ => Err(Error::UnknownParsingError),
+                _ => Err(Error::UnknownFrame),
             },
-            Err(_) => unreachable!(),
         }
     }
 }

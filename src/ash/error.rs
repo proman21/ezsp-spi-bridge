@@ -2,7 +2,6 @@ use std::io::Error as IoError;
 
 #[derive(Debug)]
 pub enum Error {
-    UnknownParsingError,
     InvalidChecksum,
     InvalidDataField,
     Io(IoError),
