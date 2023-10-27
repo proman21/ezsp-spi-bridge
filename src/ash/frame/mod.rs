@@ -9,7 +9,7 @@ mod utils;
 use bytes::{BufMut, BytesMut};
 use nom::{
     branch::alt,
-    combinator::{cut, map},
+    combinator::map,
 };
 
 use super::{
