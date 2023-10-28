@@ -2,7 +2,7 @@ use std::time::Duration;
 
 use bytes::{Buf, Bytes, BytesMut};
 use nom::{Err, Finish, Needed};
-use tokio::time::{sleep, sleep_until, Instant};
+use tokio::time::{sleep_until, Instant};
 
 use crate::buffers::Buffer;
 
@@ -113,7 +113,7 @@ impl<D: SpiDevice> NCP<D> {
         }
     }
 
-    async fn poll_interrupt(&mut self, timeout: Duration) -> Result<bool> {
+    pub async fn poll_interrupt(&mut self, timeout: Duration) -> Result<bool> {
         let res = self.device.poll_interrupt_signal(timeout).await?;
         Ok(res)
     }
@@ -176,9 +176,10 @@ impl<D: SpiDevice> NCP<D> {
     }
 
     async fn pulse_reset(&mut self, wake: bool) -> Result<()> {
+        let start_time = Instant::now();
         self.device.set_reset_signal(true).await?;
         self.device.set_wake_signal(wake).await?;
-        sleep(RESET_PULSE_TIME).await;
+        while start_time.elapsed().as_micros() < 2 {}
         self.device.set_reset_signal(false).await?;
         Ok(())
     }
