@@ -245,4 +245,8 @@ impl<D: SpiDevice> NCP<D> {
         self.device.set_wake_signal(false)?;
         Ok(())
     }
+
+    pub fn into_inner(self) -> D {
+        self.device
+    }
 }
