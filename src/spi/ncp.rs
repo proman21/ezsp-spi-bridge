@@ -1,10 +1,7 @@
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use bytes::{Buf, Bytes, BytesMut};
 use nom::{Err, Finish, Needed};
-use tokio::time::{sleep_until, Instant};
-
-use crate::buffers::Buffer;
 
 use super::{
     command::Command,
@@ -70,40 +67,45 @@ impl<D: SpiDevice> NCP<D> {
         }
     }
 
-    async fn read_response(&mut self) -> Result<RawResponse> {
+    fn read_response(&mut self) -> Result<RawResponse> {
+        let mut write_buffer = self.read_buf.clone();
         // Read and discard 0xFF bytes until a different byte is encountered.
-        let mut index = 0;
-        self.read_buf[0] = self.device.drop_until().await?;
-        index += 1;
+        write_buffer[0] = 0xFF;
+        while self.read_buf[0] == 0xFF {
+            self.device.read(&mut write_buffer[..1])?;
+        }
+        write_buffer.advance(1);
 
         // Start parsing a response from the first byte
-        let res: Result<(Buffer, RawResponse)> = loop {
+        let res = self.try_parse_response(&mut write_buffer);
+        self.device.set_cs_signal(false)?;
+        self.read_buf = write_buffer;
+        res
+    }
+
+    fn try_parse_response(&mut self, buffer: &mut BytesMut) -> Result<RawResponse> {
+        loop {
             let input = self.read_buf.clone().freeze().into();
             let parse_res = RawResponse::parse(input);
 
             if let Err(Err::Incomplete(needed)) = parse_res {
                 if let Needed::Size(size) = needed {
                     // The response is incomplete, allocate and read the bytes
-                    // into the write section of the buffer.
+                    // into the write buffer.
                     let additional: usize = size.into();
-                    self.read_buf.reserve(additional);
-                    let mut subslice = self.read_buf.clone();
-                    subslice.advance(index);
-                    subslice.truncate(additional);
-                    self.device.read(subslice).await?;
-                    index += additional;
+                    buffer.reserve(additional);
+                    self.device.read(&mut buffer[..=additional])?;
+                    buffer.advance(additional);
                 } else {
-                    break Err(Error::InvalidResponse);
+                    return Err(Error::InvalidResponse);
                 }
+            } else {
+                return parse_res
+                    .finish()
+                    .map_err(|_| Error::InvalidResponse)
+                    .map(|(_, res)| res);
             }
-
-            break parse_res.finish().map_err(|_| Error::InvalidResponse);
-        };
-
-        self.device.set_cs_signal(false).await?;
-        self.read_buf.advance(index);
-
-        res.map(|(_rest, res)| res)
+        }
     }
 
     fn check_state(&self) -> Result<()> {
@@ -113,8 +115,8 @@ impl<D: SpiDevice> NCP<D> {
         }
     }
 
-    pub async fn poll_interrupt(&mut self, timeout: Duration) -> Result<bool> {
-        let res = self.device.poll_interrupt_signal(timeout).await?;
+    pub fn has_callback(&mut self) -> Result<bool> {
+        let res = self.device.get_interrupt_value()?;
         Ok(res)
     }
 
@@ -139,14 +141,14 @@ impl<D: SpiDevice> NCP<D> {
     ///
     /// If the device state is unknown, an 'Error::NeedsReset` will be returned.
     /// If the device is sleeping, an `Error::Unresponsive` will be returned.
-    pub async fn send(&mut self, data: Bytes) -> Result<Bytes> {
+    pub fn send(&mut self, data: Bytes) -> Result<Bytes> {
         let command = if self.is_bootloader() {
             Command::BootloaderFrame(data)
         } else {
             Command::EzspFrame(data)
         };
 
-        match self.send_command(&command).await? {
+        match self.send_command(&command)? {
             SuccessResponse::BootloaderFrame(inner) | SuccessResponse::EzspFrame(inner) => {
                 Ok(inner)
             }
@@ -154,33 +156,33 @@ impl<D: SpiDevice> NCP<D> {
         }
     }
 
-    async fn send_command(&mut self, command: &Command) -> Result<SuccessResponse> {
+    fn send_command(&mut self, command: &Command) -> Result<SuccessResponse> {
         self.check_state()?;
-        sleep_until(self.last_command_time + INTER_COMMAND_SPACING).await;
+        while self.last_command_time.elapsed() < INTER_COMMAND_SPACING {}
 
-        self.device.set_cs_signal(true).await?;
+        self.device.set_cs_signal(true)?;
 
         let mut buf = BytesMut::with_capacity(command.size());
         command.serialize(&mut buf);
-        self.device.write(buf.freeze()).await?;
+        self.device.write(&buf.freeze())?;
 
-        if !self.device.poll_interrupt_signal(RESPONSE_TIMEOUT).await? {
+        if !self.device.poll_interrupt_signal(RESPONSE_TIMEOUT)? {
             self.state = State::Unknown;
             return Err(Error::Unresponsive);
         }
 
-        let res = self.read_response().await?;
+        let res = self.read_response()?;
         self.last_command_time = Instant::now();
 
         res.into()
     }
 
-    async fn pulse_reset(&mut self, wake: bool) -> Result<()> {
+    fn pulse_reset(&mut self, wake: bool) -> Result<()> {
         let start_time = Instant::now();
-        self.device.set_reset_signal(true).await?;
-        self.device.set_wake_signal(wake).await?;
-        while start_time.elapsed().as_micros() < 2 {}
-        self.device.set_reset_signal(false).await?;
+        self.device.set_reset_signal(true)?;
+        self.device.set_wake_signal(wake)?;
+        while start_time.elapsed() < RESET_PULSE_TIME {}
+        self.device.set_reset_signal(false)?;
         Ok(())
     }
 
@@ -188,36 +190,32 @@ impl<D: SpiDevice> NCP<D> {
     ///
     /// If the NCP fails to respond to the reset, an `Error::Unresponsive` is
     /// returned.
-    pub async fn reset(&mut self, bootloader: bool) -> Result<()> {
-        self.pulse_reset(bootloader).await?;
+    pub fn reset(&mut self, bootloader: bool) -> Result<()> {
+        self.pulse_reset(bootloader)?;
         self.state = State::Unknown;
 
-        if !self
-            .device
-            .poll_interrupt_signal(RESET_STARTUP_TIME)
-            .await?
-        {
+        if !self.device.poll_interrupt_signal(RESET_STARTUP_TIME)? {
             return Err(Error::Unresponsive);
         }
-        self.device.set_wake_signal(false).await?;
+        self.device.set_wake_signal(false)?;
 
         let version_command = Command::SpiProtocolVersion;
         if !matches!(
-            self.send_command(&version_command).await,
+            self.send_command(&version_command),
             Err(Error::UnexpectedReset(0x02))
         ) {
             return Err(Error::InvalidResponse);
         }
 
         if !matches!(
-            self.send_command(&version_command).await?,
+            self.send_command(&version_command)?,
             SuccessResponse::SpiProtocolVersion(2)
         ) {
             return Err(Error::InvalidResponse);
         }
 
         if !matches!(
-            self.send_command(&Command::SpiStatus).await?,
+            self.send_command(&Command::SpiStatus)?,
             SuccessResponse::SpiStatus(true)
         ) {
             return Err(Error::InvalidResponse);
@@ -236,19 +234,15 @@ impl<D: SpiDevice> NCP<D> {
     ///
     /// If the NCP fails to respond to the wakeup, an `Error::Unresponsive` is
     /// returned.
-    pub async fn wakeup(&mut self) -> Result<()> {
-        self.device.set_wake_signal(true).await?;
+    pub fn wakeup(&mut self) -> Result<()> {
+        self.device.set_wake_signal(true)?;
 
-        if !self
-            .device
-            .poll_interrupt_signal(WAKE_HANDSHAKE_TIMEOUT)
-            .await?
-        {
+        if !self.device.poll_interrupt_signal(WAKE_HANDSHAKE_TIMEOUT)? {
             self.state = State::Unknown;
             return Err(Error::Unresponsive);
         }
 
-        self.device.set_wake_signal(false).await?;
+        self.device.set_wake_signal(false)?;
         Ok(())
     }
 }

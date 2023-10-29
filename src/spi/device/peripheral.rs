@@ -1,28 +1,30 @@
-use std::{io, path::Path, time::Duration};
-
-use async_trait::async_trait;
-use bytes::{Bytes, BytesMut};
-use spidev::{SpiModeFlags, Spidev, SpidevOptions};
-use tokio::time::timeout;
-use tokio_gpiod::{
-    Active, AsValuesMut, Bias, Chip, EdgeDetect, Input, LineId, Lines, Options, Output,
+use std::{
+    io::{self, ErrorKind},
+    path::Path,
+    time::Duration,
 };
 
-use super::{traits::SpiDevice, DeviceIoHandle};
+use gpiod::{
+    Active, AsValues, AsValuesMut, Bias, Chip, EdgeDetect, Input, LineId, Lines, Masked, Options,
+    Output,
+};
+use popol::{interest, Sources};
+use spidev::{SpiModeFlags, Spidev, SpidevOptions, SpidevTransfer};
+
+use super::traits::SpiDevice;
 use crate::spi::error::Result;
 
 const GPIO_CONSUMER_PREFIX: &'static str = "ezsp-spi-bridge";
 
-async fn setup_interrupt_pin(chip: &Chip, int_id: LineId) -> io::Result<Lines<Input>> {
+fn setup_interrupt_pin(chip: &Chip, int_id: LineId) -> io::Result<Lines<Input>> {
     chip.request_lines(
         Options::input([int_id])
             .edge(EdgeDetect::Falling)
             .consumer(GPIO_CONSUMER_PREFIX),
     )
-    .await
 }
 
-async fn setup_output_pins(
+fn setup_output_pins(
     chip: &Chip,
     cs_id: LineId,
     reset_id: LineId,
@@ -34,7 +36,6 @@ async fn setup_output_pins(
             .active(Active::Low)
             .consumer(GPIO_CONSUMER_PREFIX),
     )
-    .await
 }
 
 fn configure_spi_dev(spi: &mut Spidev) -> io::Result<()> {
@@ -46,9 +47,10 @@ fn configure_spi_dev(spi: &mut Spidev) -> io::Result<()> {
 }
 
 pub struct Peripheral {
-    io: DeviceIoHandle,
+    io: Spidev,
     interrupt: Lines<Input>,
     output_pins: Lines<Output>,
+    poll: Sources<()>,
 }
 
 impl Peripheral {
@@ -61,53 +63,80 @@ impl Peripheral {
         wake_id: LineId,
     ) -> Result<Peripheral> {
         configure_spi_dev(&mut spi)?;
-        let io = DeviceIoHandle::new(spi);
-        let chip = Chip::new(path).await?;
-        let interrupt = setup_interrupt_pin(&chip, int_id).await?;
-        let output_pins = setup_output_pins(&chip, cs_id, reset_id, wake_id).await?;
+        let chip = Chip::new(path)?;
+        let interrupt = setup_interrupt_pin(&chip, int_id)?;
+        let output_pins = setup_output_pins(&chip, cs_id, reset_id, wake_id)?;
+        let mut poll = Sources::new();
+        poll.register((), &interrupt, interest::READ);
+
         Ok(Peripheral {
-            io,
+            io: spi,
             interrupt,
             output_pins,
+            poll,
         })
+    }
+
+    fn spi_read(&self, buf: &mut [u8]) -> io::Result<()> {
+        let mut transfer = SpidevTransfer::read(buf);
+        transfer.cs_change = 0;
+        self.io.transfer(&mut transfer)
+    }
+
+    fn spi_write(&self, buf: &[u8]) -> io::Result<()> {
+        let mut transfer = SpidevTransfer::write(buf);
+        transfer.cs_change = 0;
+        self.io.transfer(&mut transfer)
     }
 }
 
-#[async_trait]
 impl SpiDevice for Peripheral {
-    async fn drop_until(&mut self) -> io::Result<u8> {
-        self.io.drop_until_byte().await
+    fn read(&mut self, mut buf: &mut [u8]) -> io::Result<()> {
+        let mut transfer = SpidevTransfer::read(&mut buf);
+        transfer.cs_change = 0;
+        self.io.transfer(&mut transfer)
     }
 
-    async fn read(&mut self, buf: BytesMut) -> io::Result<()> {
-        self.io.read_bytes(buf).await
+    fn write(&mut self, buf: &[u8]) -> io::Result<()> {
+        let mut transfer = SpidevTransfer::write(&buf);
+        transfer.cs_change = 0;
+        self.io.transfer(&mut transfer)
     }
 
-    async fn write(&mut self, buf: Bytes) -> io::Result<()> {
-        self.io.write_bytes(buf).await
-    }
-
-    async fn set_cs_signal(&mut self, value: bool) -> io::Result<()> {
-        let mut values = [None; 3];
+    fn set_cs_signal(&mut self, value: bool) -> io::Result<()> {
+        let mut values: Masked<u8> = Default::default();
         values.set(0, Some(value));
-        self.output_pins.set_values(values).await
+        self.output_pins.set_values(values)
     }
 
-    async fn set_wake_signal(&mut self, value: bool) -> io::Result<()> {
-        let mut values = [None; 3];
+    fn set_wake_signal(&mut self, value: bool) -> io::Result<()> {
+        let mut values: Masked<u8> = Default::default();
         values.set(2, Some(value));
-        self.output_pins.set_values(values).await
+        self.output_pins.set_values(values)
     }
 
-    async fn set_reset_signal(&mut self, value: bool) -> io::Result<()> {
-        let mut values = [None; 3];
+    fn set_reset_signal(&mut self, value: bool) -> io::Result<()> {
+        let mut values: Masked<u8> = Default::default();
         values.set(1, Some(value));
-        self.output_pins.set_values(values).await
+        self.output_pins.set_values(values)
     }
 
-    async fn poll_interrupt_signal(&mut self, dur: Duration) -> io::Result<bool> {
-        timeout(dur, self.interrupt.read_event())
-            .await
-            .map_or(Ok(false), |_| Ok(true))
+    fn poll_interrupt_signal(&mut self, dur: Duration) -> io::Result<bool> {
+        let mut events = Vec::new();
+
+        match self.poll.wait_timeout(&mut events, dur) {
+            Ok(_) => {
+                self.interrupt.read_event()?;
+                Ok(true)
+            }
+            Err(e) if e.kind() == ErrorKind::TimedOut => Ok(false),
+            Err(e) => Err(e),
+        }
+    }
+
+    fn get_interrupt_value(&mut self) -> io::Result<bool> {
+        let values = [false; 1];
+        let res = self.interrupt.get_values(values)?;
+        Ok(res.get(0).unwrap_or(false))
     }
 }

@@ -18,3 +18,5 @@ tokio-stream = "0.1.12"
 async-trait = "0.1.73"
 tokio-gpiod = "0.2.3"
 mockall = "0.11.4"
+gpiod = { path = "../gpiod-rs" }
+popol = "3.0.0"

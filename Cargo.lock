@@ -157,8 +157,10 @@ dependencies = [
  "async-trait",
  "bytes",
  "crc",
+ "gpiod",
  "mockall",
  "nom",
+ "popol",
  "spidev",
  "tokio",
  "tokio-gpiod",
@@ -198,6 +200,20 @@ name = "gimli"
 version = "0.28.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6fb8d784f27acf97159b40fc4db5ecd8aa23b9ad5ef69cdd136d3bc80665f0c0"
+
+[[package]]
+name = "gpiod"
+version = "0.2.3"
+dependencies = [
+ "gpiod-core 0.2.3",
+]
+
+[[package]]
+name = "gpiod-core"
+version = "0.2.3"
+dependencies = [
+ "nix",
+]
 
 [[package]]
 name = "gpiod-core"
@@ -425,6 +441,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8b870d8c151b6f2fb93e84a13146138f05d02ed11c7e7c54f8826aaaf7c9f184"
 
 [[package]]
+name = "popol"
+version = "3.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "93406933502e4446250941cf95d5e62851feb62a25b742acf7ffce96755c53e3"
+dependencies = [
+ "libc",
+]
+
+[[package]]
 name = "predicates"
 version = "2.1.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -611,7 +636,7 @@ version = "0.2.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9f95cbf8c7b56e467b15fec8936c40017aac04630103cb5f888240448ab51600"
 dependencies = [
- "gpiod-core",
+ "gpiod-core 0.2.3 (registry+https://github.com/rust-lang/crates.io-index)",
  "tokio",
 ]
 
