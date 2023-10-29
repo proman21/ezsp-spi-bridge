@@ -50,7 +50,9 @@ impl RawResponse {
     fn parse_ncp_reset(input: Buffer) -> ParserResult<RawResponse> {
         preceded(
             tag([0x00]),
-            map(take(1usize), |mut i: Buffer| RawResponse::NcpReset(i.get_u8())),
+            map(take(1usize), |mut i: Buffer| {
+                RawResponse::NcpReset(i.get_u8())
+            }),
         )(input)
     }
 

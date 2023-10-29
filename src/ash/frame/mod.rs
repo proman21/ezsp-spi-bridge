@@ -7,10 +7,7 @@ mod rst_ack;
 mod utils;
 
 use bytes::{BufMut, BytesMut};
-use nom::{
-    branch::alt,
-    combinator::map,
-};
+use nom::{branch::alt, combinator::map};
 
 use super::{
     checksum::frame_checksum,
