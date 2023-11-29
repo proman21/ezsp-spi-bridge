@@ -18,5 +18,5 @@ tokio-stream = "0.1.12"
 async-trait = "0.1.73"
 tokio-gpiod = "0.2.3"
 mockall = "0.11.4"
-gpiod = { path = "../gpiod-rs" }
+gpiod = { git = "https://github.com/proman21/gpiod-rs.git", branch = "add_fd_traits" }
 popol = "3.0.0"
