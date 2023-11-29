@@ -8,6 +8,7 @@ use super::{
     Error, Result,
 };
 
+#[derive(Debug)]
 pub struct AshCodec {
     dropping: bool,
 }

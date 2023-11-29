@@ -20,3 +20,5 @@ tokio-gpiod = "0.2.3"
 mockall = "0.11.4"
 gpiod = { git = "https://github.com/proman21/gpiod-rs.git", branch = "add_fd_traits" }
 popol = "3.0.0"
+tracing = "0.1.40"
+tracing-subscriber = { version = "0.3.18", features = ["json"]}
