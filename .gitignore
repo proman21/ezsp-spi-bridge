@@ -3,3 +3,5 @@
 # IDE Files
 .history/
 .vscode/
+
+.DS_Store
