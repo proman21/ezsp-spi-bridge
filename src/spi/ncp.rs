@@ -250,3 +250,28 @@ impl<D: SpiDevice> NCP<D> {
         self.device
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use crate::spi::device::MockSpiDevice;
+
+    use super::*;
+
+    #[test]
+    fn has_callback_returns_true_when_callback_is_present() {
+        let mut device = MockSpiDevice::new();
+        device.expect_get_interrupt_value().return_once(|| Ok(true));
+
+        let mut ncp = NCP::new(device);
+        assert!(matches!(ncp.has_callback(), Ok(true)));
+    }
+
+    #[test]
+    fn has_callback_returns_false_when_callback_is_absent() {
+        let mut device = MockSpiDevice::new();
+        device.expect_get_interrupt_value().return_once(|| Ok(false));
+
+        let mut ncp = NCP::new(device);
+        assert!(matches!(ncp.has_callback(), Ok(false)));
+    }
+}
