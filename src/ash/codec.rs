@@ -1,13 +1,14 @@
-use bytes::{Buf, BytesMut};
-use nom::{error::ErrorKind, Err, Finish, Needed, Offset};
-use tokio_util::codec::{Decoder, Encoder};
-
 use super::{
     constants::{CANCEL_BYTE, FLAG_BYTE, SUB_BYTE},
     frame::Frame,
     Error, Result,
 };
+use bytes::{Buf, BytesMut};
+use nom::{Err, Finish, Needed, Offset};
+use tokio_util::codec::{Decoder, Encoder};
+use tracing::{instrument, trace};
 
+#[derive(Debug)]
 pub struct AshCodec {
     dropping: bool,
 }
@@ -18,7 +19,9 @@ impl AshCodec {
     ///
     /// If a substitute byte is encountered, subsequent calls to this function
     /// will continue dropping the buffer preceding an unescaped flag byte.
+    #[instrument]
     fn drop_buffer_framing_errors(&mut self, buf: &mut BytesMut) {
+        trace!("Searching and dropping buffer framing errors");
         if !self.dropping {
             self.drop_buffer_before_substitute(buf);
         }
@@ -30,23 +33,37 @@ impl AshCodec {
         }
     }
 
+    #[instrument]
     fn drop_buffer_before_substitute(&mut self, buf: &mut BytesMut) {
-        if let Some(idx) = buf
-            .iter()
-            .position(|&b| b == SUB_BYTE || b == CANCEL_BYTE || b == FLAG_BYTE)
-        {
-            if buf[idx] == FLAG_BYTE {
-                return;
+        trace!("Searching for framing error bytes");
+        loop {
+            if let Some(idx) = buf
+                .iter()
+                .position(|&b| b == SUB_BYTE || b == CANCEL_BYTE || b == FLAG_BYTE)
+            {
+                if buf[idx] == FLAG_BYTE {
+                    trace!("Flag byte detected at index {}, bailing", idx);
+                    break;
+                }
+                self.dropping = buf[idx] == SUB_BYTE;
+                trace!(
+                    dropping = self.dropping,
+                    "Found a framing byte {:x} at index {}",
+                    buf[idx],
+                    idx
+                );
+                buf.advance(idx + 1);
             }
-            self.dropping = buf[idx] == SUB_BYTE;
-            buf.advance(idx + 1);
         }
     }
 
     fn drop_buffer_til_flag(&mut self, buf: &mut BytesMut) {
+        trace!("Dropping buffer until flag byte found");
         if let Some(idx) = buf.iter().position(|&b| b == FLAG_BYTE) {
+            trace!("Flag byte found at pos {}, dropping bytes before", idx);
             buf.advance(idx + 1);
             self.dropping = false;
+            trace!("Buffer drop operation complete")
         } else {
             let _ = buf.split();
         }
@@ -67,36 +84,32 @@ impl Decoder for AshCodec {
     type Item = Result<Frame>;
     type Error = Error;
 
+    #[instrument]
     fn decode(&mut self, src: &mut BytesMut) -> Result<Option<Self::Item>> {
         self.drop_buffer_framing_errors(src);
 
         let res = Frame::parse(&src[..]);
 
         if let Err(Err::Incomplete(needed)) = res {
+            trace!(bytes_needed = ?needed, "Incomplete frame detected");
             if let Needed::Size(additional) = needed {
                 src.reserve(additional.into());
             }
             return Ok(None);
         }
 
-        match res.finish() {
-            Ok((rest, frame)) => {
-                let offset = src.offset(rest);
-                src.advance(offset);
-                Ok(Some(Ok(frame)))
+        let (rest, frame) = match res.finish() {
+            Ok(v) => v,
+            Err(e) => {
+                let (input, error) = e.into_inner();
+                src.advance(src.offset(input));
+                return Err(error);
             }
-            Err(e) => match e.code {
-                ErrorKind::Verify => {
-                    src.advance(src.offset(e.input));
-                    Ok(Some(Err(Error::InvalidChecksum)))
-                }
-                ErrorKind::Complete => {
-                    src.advance(src.offset(e.input));
-                    Ok(Some(Err(Error::InvalidDataField)))
-                }
-                _ => Err(Error::UnknownFrame),
-            },
-        }
+        };
+        let offset = src.offset(rest);
+        trace!("Frame decoded, {} bytes", offset);
+        src.advance(offset);
+        Ok(Some(Ok(frame)))
     }
 }
 
@@ -145,7 +158,7 @@ mod tests {
 
         assert!(matches!(
             codec.decode(&mut buf),
-            Ok(Some(Err(Error::InvalidChecksum)))
+            Ok(Some(Err(Error::InvalidChecksum(_))))
         ));
         assert_eq!(buf.len(), 0);
     }
@@ -157,7 +170,7 @@ mod tests {
 
         assert!(matches!(
             codec.decode(&mut buf),
-            Ok(Some(Err(Error::InvalidDataField)))
+            Ok(Some(Err(Error::InvalidDataField(_))))
         ));
         assert_eq!(buf.len(), 0);
     }

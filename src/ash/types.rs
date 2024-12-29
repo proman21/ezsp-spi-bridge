@@ -1,11 +1,30 @@
-use std::ops::Deref;
+use std::{
+    fmt::Display,
+    ops::{Add, AddAssign, Deref},
+};
+
+fn three_bit_wrapped_add(lhs: u8, rhs: u8) -> u8 {
+    (lhs + rhs) % 8
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct FrameNumber(u8);
 
 impl FrameNumber {
+    pub fn new(value: u8) -> Option<FrameNumber> {
+        if value > 7 {
+            None
+        } else {
+            Some(FrameNumber(value))
+        }
+    }
+
     pub fn new_truncate(value: u8) -> FrameNumber {
         FrameNumber(value & 0x07)
+    }
+
+    pub fn zero() -> FrameNumber {
+        FrameNumber(0)
     }
 }
 
@@ -18,20 +37,42 @@ impl Deref for FrameNumber {
 }
 
 impl TryFrom<u8> for FrameNumber {
-    type Error = ();
+    type Error = &'static str;
 
     fn try_from(value: u8) -> Result<Self, Self::Error> {
-        if value > 7 {
-            Err(())
-        } else {
-            Ok(FrameNumber(value))
-        }
+        FrameNumber::new(value).ok_or("FrameNumber only accepts values between 0 and 7")
     }
 }
 
 impl From<FrameNumber> for u8 {
     fn from(val: FrameNumber) -> Self {
         val.0
+    }
+}
+
+impl Default for FrameNumber {
+    fn default() -> Self {
+        Self(0)
+    }
+}
+
+impl Add<u8> for FrameNumber {
+    type Output = FrameNumber;
+
+    fn add(self, rhs: u8) -> Self::Output {
+        FrameNumber(three_bit_wrapped_add(self.0, rhs))
+    }
+}
+
+impl AddAssign<u8> for FrameNumber {
+    fn add_assign(&mut self, rhs: u8) {
+        self.0 = three_bit_wrapped_add(self.0, rhs);
+    }
+}
+
+impl Display for FrameNumber {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        Display::fmt(&self.0, f)
     }
 }
 
