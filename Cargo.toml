@@ -16,7 +16,14 @@ tokio = { version = "1.27.0", features = ["full", "test-util"] }
 tokio-util = { version = "0.7.9", features = ["codec"] }
 tokio-stream = "0.1.12"
 async-trait = "0.1.73"
-tokio-gpiod = "0.2.3"
 mockall = "0.11.4"
 gpiod = { git = "https://github.com/proman21/gpiod-rs.git", branch = "add_fd_traits" }
 popol = "3.0.0"
+tracing = "0.1.40"
+tracing-subscriber = { version = "0.3.18", features = ["json"] }
+serde = { version = "1.0.193", features = ["derive"] }
+config = "0.13.4"
+anyhow = "1.0.75"
+thiserror = "1.0.50"
+futures = { version = "0.3.29", features = ["std"]}
+pin-project = "1.1.3"
