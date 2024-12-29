@@ -1,11 +1,10 @@
-use std::{result, sync::Arc};
-
 use super::{
     device::SpiDevice,
     error::{Error, Result},
     ncp::NCP,
 };
 use bytes::Bytes;
+use std::{result, sync::Arc};
 use tokio::{
     sync::{
         mpsc::{channel, error::TryRecvError, Receiver, Sender},
@@ -31,11 +30,14 @@ enum SpiActorMessage {
     },
 }
 
-fn spi_device_actor<D: SpiDevice + Send>(
+fn spi_device_actor<D>(
     device: D,
     mut mailbox: Receiver<SpiActorMessage>,
     interrupt: Arc<Notify>,
-) -> impl FnOnce() -> D + Send {
+) -> impl FnOnce() -> D + Send
+where
+    D: SpiDevice + Send,
+{
     move || {
         let mut ncp = NCP::new(device);
         loop {
@@ -63,23 +65,38 @@ fn spi_device_actor<D: SpiDevice + Send>(
     }
 }
 
-pub struct SpiDeviceHandle<D: SpiDevice + Send + 'static> {
-    actor: JoinHandle<D>,
+pub struct SpiDeviceActor<D> {
+    handle: JoinHandle<D>,
+}
+
+impl<D> SpiDeviceActor<D>
+where
+    D: SpiDevice + Send + 'static,
+{
+    fn new(
+        device: D,
+        mailbox: Receiver<SpiActorMessage>,
+        interrupt: Arc<Notify>,
+    ) -> SpiDeviceActor<D> {
+        let handle = spawn_blocking(spi_device_actor(device, mailbox, interrupt));
+
+        SpiDeviceActor { handle }
+    }
+
+    pub async fn into_inner(self) -> result::Result<D, JoinError> {
+        self.handle.await
+    }
+}
+
+#[derive(Clone)]
+pub struct SpiDeviceHandle {
     mailbox: Sender<SpiActorMessage>,
     interrupt: Arc<Notify>,
 }
 
-impl<D: SpiDevice + Send + 'static> SpiDeviceHandle<D> {
-    pub fn new(device: D) -> SpiDeviceHandle<D> {
-        let (mailbox, recv) = channel(1);
-        let interrupt = Arc::new(Notify::new());
-        let actor = spawn_blocking(spi_device_actor(device, recv, interrupt.clone()));
-
-        SpiDeviceHandle {
-            actor,
-            mailbox,
-            interrupt,
-        }
+impl SpiDeviceHandle {
+    fn new(mailbox: Sender<SpiActorMessage>, interrupt: Arc<Notify>) -> SpiDeviceHandle {
+        SpiDeviceHandle { mailbox, interrupt }
     }
 
     async fn send_message(&self, msg: SpiActorMessage) -> Result<()> {
@@ -119,9 +136,15 @@ impl<D: SpiDevice + Send + 'static> SpiDeviceHandle<D> {
     pub async fn has_callback(&self) {
         self.interrupt.notified().await
     }
+}
 
-    pub async fn shutdown(self) -> result::Result<D, JoinError> {
-        drop(self.mailbox);
-        self.actor.await
-    }
+pub fn spi_device_handle<D>(device: D) -> (SpiDeviceActor<D>, SpiDeviceHandle)
+where
+    D: SpiDevice + Send + 'static,
+{
+    let (tx, rx) = channel(1);
+    let interrupt = Arc::new(Notify::new());
+    let actor = SpiDeviceActor::new(device, rx, interrupt.clone());
+    let handle = SpiDeviceHandle::new(tx, interrupt);
+    (actor, handle)
 }
