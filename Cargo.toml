@@ -1,5 +1,5 @@
 [package]
-name = "ezsp-spi-driver"
+name = "ezsp-spi-bridge"
 version = "0.1.0"
 edition = "2021"
 authors = ["Adam Jacobus"]
